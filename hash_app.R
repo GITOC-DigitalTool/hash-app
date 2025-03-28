@@ -13,11 +13,20 @@ library(bslib)
 library(digest)
 library(readxl)
 
-shared_key <- "PlaceholderSecretKey"
+shared_key <- "HC_RandomGen_Seed" # do not change this, it is the random seed code that enables everyone to produce that same randomly generated hash codes for their URLS
+
 
 ui <- fluidPage(
   theme = bs_theme(bootswatch = "lux"),
   titlePanel("URL Hasher"),
+  
+  # Custom CSS to style the text input boxes
+  tags$style(HTML("
+    .form-control {
+      background-color: white !important;
+      color: black;
+    }
+  ")),
   
   tabsetPanel(
     tabPanel("Single URL",
@@ -37,60 +46,30 @@ ui <- fluidPage(
              fluidRow(
                column(6, offset = 3,
                       wellPanel(
+                        tags$p("Upload a .csv file with a single column of your URLs here"),
+                        textInput("org_name", "Organization Name", placeholder = "Enter Organization Name"),
                         fileInput("file_upload", "Upload CSV or XLSX file", accept = c(".csv", ".xlsx")),
                         downloadButton("download_file", "Download Processed File", class = "btn-success")
                       )
                )
+             ),
+             fluidRow(
+               column(6, offset = 3,
+                      wellPanel(
+                        h4("Summary"),
+                        textOutput("num_records")
+                      )
+               )
              )
     )
-  ),
-  
-  tags$script(HTML(
-    "$(document).ready(function(){
-      $('#copy_btn').click(function(){
-        var text = $('#hashed_url').text();
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text)
-            .then(function() {
-              console.log('Text successfully copied using Clipboard API!');
-            })
-            .catch(function(err) {
-              console.error('Clipboard API failed, trying fallback method:', err);
-              fallbackCopyText(text);
-            });
-        } else {
-          fallbackCopyText(text);
-        }
-      });
-      
-      function fallbackCopyText(text) {
-        var textArea = document.createElement('textarea');
-        textArea.value = text;
-        // Avoid scrolling to bottom
-        textArea.style.top = '0';
-        textArea.style.left = '0';
-        textArea.style.position = 'fixed';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          var successful = document.execCommand('copy');
-          var msg = successful ? 'successful' : 'unsuccessful';
-          console.log('Fallback: Copying text command was ' + msg);
-        } catch (err) {
-          console.error('Fallback: Unable to copy', err);
-        }
-        document.body.removeChild(textArea);
-      }
-    });"
-  ))
+  )
 )
 
 server <- function(input, output, session) {
   
   hash_result <- reactive({
     if (nzchar(input$url_input)) {
-      hmac(key = shared_key, object = trimws(input$url_input), algo = "sha256")
+      hmac(key = shared_key, object = trimws(tolower(input$url_input)), algo = "sha256")
     } else {
       ""
     }
@@ -116,12 +95,10 @@ server <- function(input, output, session) {
   processed_file <- reactive({
     df <- file_data()
     req(df)
-    if ("url" %in% names(df)) {
-      col_name <- "url"
-    } else {
-      col_name <- names(df)[1]
-    }
-    df[[paste0(col_name, "_hashed")]] <- sapply(df[[col_name]], function(x) {
+    if (ncol(df) < 1) return(NULL)
+    
+    col_name <- names(df)[1]
+    df$hashed_URL <- sapply(df[[col_name]], function(x) {
       x <- as.character(x)
       if (!is.na(x) && nzchar(trimws(x))) {
         hmac(key = shared_key, object = trimws(x), algo = "sha256")
@@ -129,7 +106,20 @@ server <- function(input, output, session) {
         NA
       }
     })
+    
+    df$Org_Name <- ifelse(nzchar(input$org_name), input$org_name, "Unknown")
+    names(df)[1] <- "URL"
+    
+    # Show notification after processing
+    showNotification("Data Encrypted!", type = "message", duration = 3)
+    
     df
+  })
+  
+  output$num_records <- renderText({
+    df <- file_data()
+    if (is.null(df)) return("Number of records: 0")
+    paste("Number of records encrypted:", nrow(df))
   })
   
   output$download_file <- downloadHandler(
